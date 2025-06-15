@@ -1,5 +1,5 @@
-import Web3 from 'web3';
-import { WalletState, NetworkInfo } from '../types';
+import { ethers } from 'ethers';
+import { WalletState } from '../types';
 
 declare global {
   interface Window {
@@ -7,15 +7,16 @@ declare global {
   }
 }
 
-class Web3Service {
-  private web3: Web3 | null = null;
+class ShardeumAPI {
+  private rpcUrl: string;
+  private provider: ethers.BrowserProvider | null;
+  private signer: ethers.Signer | null;
   private readonly SHARDEUM_CHAIN_ID = '0x1f93'; // 8083 in hex
-  private readonly SHARDEUM_RPC = 'https://api-testnet.shardeum.org';
 
   constructor() {
-    if (window.ethereum) {
-      this.web3 = new Web3(window.ethereum);
-    }
+    this.rpcUrl = 'https://api-testnet.shardeum.org';
+    this.provider = null;
+    this.signer = null;
   }
 
   // Check if MetaMask is installed
@@ -44,7 +45,17 @@ class Web3Service {
         method: 'eth_chainId',
       });
 
-      // Get balance
+      // Initialize provider and signer for transactions
+      if (!this.provider) {
+        this.provider = new ethers.BrowserProvider(window.ethereum);
+      }
+      
+      // Initialize signer for transactions
+      if (!this.signer) {
+        this.signer = await this.provider.getSigner();
+      }
+
+      // Get balance (already formatted in ether)
       const balance = await this.getBalance(address);
 
       return {
@@ -55,20 +66,6 @@ class Web3Service {
       };
     } catch (error: any) {
       throw new Error(`Failed to connect wallet: ${error.message}`);
-    }
-  }
-
-  // Get account balance
-  async getBalance(address: string): Promise<string> {
-    if (!this.web3) {
-      throw new Error('Web3 not initialized');
-    }
-
-    try {
-      const balanceWei = await this.web3.eth.getBalance(address);
-      return this.web3.utils.fromWei(balanceWei, 'ether');
-    } catch (error: any) {
-      throw new Error(`Failed to get balance: ${error.message}`);
     }
   }
 
@@ -98,7 +95,7 @@ class Web3Service {
                   symbol: 'SHM',
                   decimals: 18,
                 },
-                rpcUrls: [this.SHARDEUM_RPC],
+                rpcUrls: [this.rpcUrl],
                 blockExplorerUrls: ['https://explorer-testnet.shardeum.org'],
                 iconUrls: ['https://shardeum.org/favicon.ico'],
               },
@@ -110,141 +107,6 @@ class Web3Service {
       } else {
         throw new Error(`Failed to switch to Shardeum network: ${switchError.message}`);
       }
-    }
-  }
-
-  // Verify network configuration
-  async verifyNetwork(): Promise<boolean> {
-    try {
-      const chainId = await window.ethereum.request({ method: 'eth_chainId' });
-      return chainId === this.SHARDEUM_CHAIN_ID;
-    } catch {
-      return false;
-    }
-  }
-
-  // Send SHM tip
-  async sendTip(toAddress: string, amount: string): Promise<string> {
-    if (!this.web3 || !window.ethereum) {
-      throw new Error('Web3 not initialized');
-    }
-
-    // Verify we're on the correct network
-    const isCorrectNetwork = await this.verifyNetwork();
-    if (!isCorrectNetwork) {
-      throw new Error('Please switch to Shardeum Testnet before sending tips');
-    }
-
-    try {
-      const accounts = await window.ethereum.request({
-        method: 'eth_accounts',
-      });
-
-      if (accounts.length === 0) {
-        throw new Error('No connected accounts');
-      }
-
-      const fromAddress = accounts[0];
-      
-      // Validate amount
-      const numAmount = parseFloat(amount);
-      if (!/^\d*\.?\d+$/.test(amount)) {
-        throw new Error('Invalid tip amount');
-      }
-      
-
-      // Convert to Wei with validation
-      const amountWei = this.web3.utils.toWei(amount, 'ether');
-      
-      // Double-check the conversion
-      const backToEther = this.web3.utils.fromWei(amountWei, 'ether');
-      if (parseFloat(backToEther) !== numAmount) {
-        throw new Error('Amount conversion error. Please try again.');
-      }
-
-      console.log('Sending tip:', {
-        from: fromAddress,
-        to: toAddress,
-        amount: amount + ' SHM',
-        amountWei: amountWei + ' Wei',
-        verification: backToEther + ' SHM (converted back)'
-      });
-
-      // Check balance before sending
-      const balance = await this.getBalance(fromAddress);
-      if (parseFloat(balance) < numAmount) {
-        throw new Error(`Insufficient balance. You have ${balance} SHM but trying to send ${amount} SHM`);
-      }
-
-      // Estimate gas
-      const gasEstimate = await this.web3.eth.estimateGas({
-        from: fromAddress,
-        to: toAddress,
-        value: amountWei,
-      });
-
-      // Get current gas price
-      const gasPrice = await this.web3.eth.getGasPrice();
-
-      // Send transaction with proper formatting
-      const transactionParams = {
-        from: fromAddress,
-        to: toAddress,
-        value: amountWei,
-        gas: this.web3.utils.toHex(gasEstimate),
-        gasPrice: this.web3.utils.toHex(gasPrice),
-      };
-
-      console.log('Transaction params:', {
-        ...transactionParams,
-        valueInSHM: amount + ' SHM',
-        valueInWei: amountWei + ' Wei'
-      });
-
-      const txHash = await window.ethereum.request({
-        method: 'eth_sendTransaction',
-        params: [transactionParams],
-      });
-
-      console.log('Transaction sent:', txHash);
-      return txHash;
-    } catch (error: any) {
-      console.error('Send tip error:', error);
-      throw new Error(`Failed to send tip: ${error.message}`);
-    }
-  }
-
-  // Get transaction receipt
-  async getTransactionReceipt(txHash: string) {
-    if (!this.web3) {
-      throw new Error('Web3 not initialized');
-    }
-
-    try {
-      return await this.web3.eth.getTransactionReceipt(txHash);
-    } catch (error: any) {
-      throw new Error(`Failed to get transaction receipt: ${error.message}`);
-    }
-  }
-
-  // Get current network info
-  async getNetworkInfo(): Promise<NetworkInfo> {
-    if (!this.web3) {
-      throw new Error('Web3 not initialized');
-    }
-
-    try {
-      const chainId = await this.web3.eth.getChainId();
-      const blockNumber = await this.web3.eth.getBlockNumber();
-      const gasPrice = await this.web3.eth.getGasPrice();
-
-      return {
-        chainId: `0x${chainId.toString(16)}`,
-        blockNumber: Number(blockNumber),
-        gasPrice: Number(gasPrice),
-      };
-    } catch (error: any) {
-      throw new Error(`Failed to get network info: ${error.message}`);
     }
   }
 
@@ -278,9 +140,420 @@ class Web3Service {
 
   // Validate Ethereum address
   isValidAddress(address: string): boolean {
-    if (!this.web3) return false;
-    return this.web3.utils.isAddress(address);
+    return ethers.isAddress(address);
+  }
+
+  // Verify network configuration
+  async verifyNetwork(): Promise<boolean> {
+    try {
+      const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+      return chainId === this.SHARDEUM_CHAIN_ID;
+    } catch {
+      return false;
+    }
+  }
+
+  // Check if wallet is properly connected
+  async isWalletConnected(): Promise<boolean> {
+    try {
+      if (!window.ethereum) return false;
+      
+      const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+      return accounts.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  // Send SHM tip (alias for sendTransaction to maintain compatibility)
+  async sendTip(toAddress: string, amount: string): Promise<string> {
+    return this.sendTransaction(toAddress, amount);
+  }
+
+  // Initialize connection to Shardeum network
+  async initialize() {
+    try {
+      if (typeof window.ethereum !== 'undefined') {
+        this.provider = new ethers.BrowserProvider(window.ethereum);
+        // Request accounts if not already connected
+        const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+        if (accounts.length === 0) {
+          await this.provider.send("eth_requestAccounts", []);
+        }
+        this.signer = await this.provider.getSigner();
+        return true;
+      } else {
+        throw new Error('MetaMask or compatible wallet not found');
+      }
+    } catch (error) {
+      console.error('Failed to initialize Shardeum connection:', error);
+      throw error;
+    }
+  }
+
+  // Get current chain ID
+  async getChainId() {
+    try {
+      const response = await fetch(this.rpcUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          method: 'eth_chainId',
+          id: 1,
+          jsonrpc: '2.0'
+        })
+      });
+      const data = await response.json();
+      return data.result;
+    } catch (error) {
+      console.error('Error getting chain ID:', error);
+      throw error;
+    }
+  }
+
+  // Get current gas price
+  async getGasPrice() {
+    try {
+      const response = await fetch(this.rpcUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          method: 'eth_gasPrice',
+          id: 1,
+          jsonrpc: '2.0'
+        })
+      });
+      const data = await response.json();
+      return data.result;
+    } catch (error) {
+      console.error('Error getting gas price:', error);
+      throw error;
+    }
+  }
+
+  // Get account balance (returns wei as string) - mimics original Web3 behavior
+  async getBalance(address: string): Promise<string> {
+    try {
+      // Always use MetaMask provider to get balance from currently connected network
+      if (!this.provider && window.ethereum) {
+        this.provider = new ethers.BrowserProvider(window.ethereum);
+      }
+      
+      if (this.provider) {
+        const balance = await this.provider.getBalance(address);
+        return ethers.formatEther(balance); // Return formatted balance like original
+      }
+      
+      throw new Error('No provider available');
+    } catch (error) {
+      console.error('Error getting balance:', error);
+      throw error;
+    }
+  }
+
+  // Get balance specifically from Shardeum testnet RPC
+  async getShardeumBalance(address: string): Promise<string> {
+    try {
+      const response = await fetch(this.rpcUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          method: 'eth_getBalance',
+          params: [address, 'latest'],
+          id: 1,
+          jsonrpc: '2.0'
+        })
+      });
+      const data = await response.json();
+      return data.result;
+    } catch (error) {
+      console.error('Error getting Shardeum balance:', error);
+      throw error;
+    }
+  }
+
+  // Get transaction count (nonce)
+  async getTransactionCount(address: string) {
+    try {
+      const response = await fetch(this.rpcUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          method: 'eth_getTransactionCount',
+          params: [address, 'latest'],
+          id: 1,
+          jsonrpc: '2.0'
+        })
+      });
+      const data = await response.json();
+      return data.result;
+    } catch (error) {
+      console.error('Error getting transaction count:', error);
+      throw error;
+    }
+  }
+
+  // Estimate gas for transaction
+  async estimateGas(transactionObject: any) {
+    try {
+      const response = await fetch(this.rpcUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          method: 'eth_estimateGas',
+          params: [transactionObject, 'latest'],
+          id: 1,
+          jsonrpc: '2.0'
+        })
+      });
+      const data = await response.json();
+      return data.result;
+    } catch (error) {
+      console.error('Error estimating gas:', error);
+      throw error;
+    }
+  }
+
+  // Send SHM transaction
+  async sendTransaction(to: string, amount: string, gasLimit: number | null = null) {
+    try {
+      // Ensure provider and signer are initialized
+      if (!this.provider && window.ethereum) {
+        this.provider = new ethers.BrowserProvider(window.ethereum);
+      }
+      
+      if (!this.signer && this.provider) {
+        this.signer = await this.provider.getSigner();
+      }
+      
+      if (!this.signer) {
+        throw new Error('Wallet not connected. Please connect your wallet first.');
+      }
+
+      // Verify we're on the correct network
+      const isCorrectNetwork = await this.verifyNetwork();
+      if (!isCorrectNetwork) {
+        throw new Error('Please switch to Shardeum Testnet before sending transactions');
+      }
+
+      const fromAddress = await this.signer.getAddress();
+      const value = ethers.parseEther(amount.toString());
+      
+      // Get current gas price
+      const gasPrice = await this.getGasPrice();
+      
+      const transactionObject: any = {
+        from: fromAddress,
+        to: to,
+        value: '0x' + value.toString(16),
+        gasPrice: gasPrice
+      };
+
+      // Estimate gas if not provided
+      let finalGasLimit: string;
+      if (!gasLimit) {
+        const estimatedGas = await this.estimateGas(transactionObject);
+        finalGasLimit = estimatedGas;
+      } else {
+        finalGasLimit = '0x' + gasLimit.toString(16);
+      }
+
+      // Send transaction using MetaMask
+      const txResponse = await this.signer.sendTransaction({
+        to: to,
+        value: value,
+        gasPrice: gasPrice,
+        gasLimit: finalGasLimit
+      });
+
+      return txResponse.hash;
+    } catch (error) {
+      console.error('Error sending transaction:', error);
+      throw error;
+    }
+  }
+
+  // Get transaction receipt
+  async getTransactionReceipt(txHash: string) {
+    try {
+      const response = await fetch(this.rpcUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          method: 'eth_getTransactionReceipt',
+          params: [txHash],
+          id: 1,
+          jsonrpc: '2.0'
+        })
+      });
+      const data = await response.json();
+      return data.result;
+    } catch (error) {
+      console.error('Error getting transaction receipt:', error);
+      throw error;
+    }
+  }
+
+  // Get transaction by hash
+  async getTransactionByHash(txHash: string) {
+    try {
+      const response = await fetch(this.rpcUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          method: 'eth_getTransactionByHash',
+          params: [txHash],
+          id: 1,
+          jsonrpc: '2.0'
+        })
+      });
+      const data = await response.json();
+      return data.result;
+    } catch (error) {
+      console.error('Error getting transaction:', error);
+      throw error;
+    }
+  }
+
+  // Get current block number
+  async getBlockNumber() {
+    try {
+      const response = await fetch(this.rpcUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          method: 'eth_blockNumber',
+          id: 1,
+          jsonrpc: '2.0'
+        })
+      });
+      const data = await response.json();
+      return data.result;
+    } catch (error) {
+      console.error('Error getting block number:', error);
+      throw error;
+    }
+  }
+
+  // Get network account information (Shardeum specific)
+  async getNetworkAccount() {
+    try {
+      const response = await fetch(this.rpcUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          method: 'shardeum_getNetworkAccount',
+          params: [],
+          id: 1,
+          jsonrpc: '2.0'
+        })
+      });
+      const data = await response.json();
+      return data.result;
+    } catch (error) {
+      console.error('Error getting network account:', error);
+      throw error;
+    }
+  }
+
+  // Get node list (Shardeum specific)
+  async getNodeList(page = 1, limit = 100) {
+    try {
+      const response = await fetch(this.rpcUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          method: 'shardeum_getNodeList',
+          params: [{ page, limit }],
+          id: 1,
+          jsonrpc: '2.0'
+        })
+      });
+      const data = await response.json();
+      return data.result;
+    } catch (error) {
+      console.error('Error getting node list:', error);
+      throw error;
+    }
+  }
+
+  // Format SHM amount from wei
+  formatSHM(weiAmount: string) {
+    return ethers.formatEther(weiAmount);
+  }
+
+  // Parse SHM amount to wei
+  parseSHM(shmAmount: string) {
+    return ethers.parseEther(shmAmount.toString());
+  }
+
+  // Get current wallet address
+  async getCurrentAddress() {
+    if (!this.signer) {
+      throw new Error('Wallet not connected');
+    }
+    return await this.signer.getAddress();
+  }
+
+  // Debug method to check network and balance info
+  async getDebugInfo(address: string) {
+    try {
+      const currentChainId = await window.ethereum.request({ method: 'eth_chainId' });
+      const isCorrectNetwork = currentChainId === this.SHARDEUM_CHAIN_ID;
+      
+      let metamaskBalance = '0';
+      let shardeumBalance = '0';
+      
+      try {
+        if (this.provider) {
+          const balance = await this.provider.getBalance(address);
+          metamaskBalance = ethers.formatEther(balance);
+        }
+      } catch (e) {
+        console.warn('Could not get MetaMask balance:', e);
+      }
+      
+      try {
+        const balance = await this.getShardeumBalance(address);
+        shardeumBalance = ethers.formatEther(balance);
+      } catch (e) {
+        console.warn('Could not get Shardeum balance:', e);
+      }
+
+      return {
+        address,
+        currentChainId,
+        expectedChainId: this.SHARDEUM_CHAIN_ID,
+        isCorrectNetwork,
+        metamaskBalance,
+        shardeumBalance,
+        rpcUrl: this.rpcUrl
+      };
+    } catch (error) {
+      console.error('Error getting debug info:', error);
+      throw error;
+    }
   }
 }
 
-export default new Web3Service(); 
+export default new ShardeumAPI(); 
